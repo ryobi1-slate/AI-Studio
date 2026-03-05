@@ -3120,490 +3120,480 @@ async function loadAdmin() {
   
   
   async function loadBOM(){
+    // UI-first BOM Builder rebuild (matches AI Studio BOM spec layout).
     view(`
-      <div class="ops-grid" style="display:grid; grid-template-columns: 360px 1fr; gap: 14px;">
-        <div class="card">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-            <h2 style="margin:0;">BOMs</h2>
-            <button class="btn btn-primary" id="bom-new">+ New</button>
+      <div class="bom-ui">
+        <div class="bom-ui__list">
+          <div class="bom-ui__listHeader">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <div class="bom-ui__title">BOMs</div>
+              <button class="bom-ui__btn bom-ui__btnPrimary" id="bom-new">+ New</button>
+            </div>
+            <input id="bom-search" class="bom-ui__search" placeholder="Search BOM # or name..." />
           </div>
-          <div style="margin-top:10px;">
-            <input id="bom-search" class="input" placeholder="Search BOM # or name..." style="width:100%;" />
-          </div>
-          <div id="bom-list" style="margin-top:10px; max-height: 70vh; overflow:auto;"></div>
+          <div id="bom-list" class="bom-ui__items"></div>
         </div>
 
-        <div class="card" id="bom-editor">
-          <h2 style="margin:0 0 8px;">BOM Builder</h2>
-          <p style="margin:0; color:rgba(0,0,0,0.65);">Select a BOM on the left, or click <b>New</b>.</p>
+        <div class="bom-ui__editor" id="bom-editorRoot">
+          <div class="bom-ui__editorEmpty" id="bom-empty">
+            <div style="text-align:center;">
+              <span class="material-symbols-outlined" style="font-size:56px; display:block; margin-bottom:10px; opacity:.7;">inventory_2</span>
+              <div style="font-size:16px; font-weight:700;">Select a BOM to edit</div>
+            </div>
+          </div>
         </div>
       </div>
     `);
 
-    const state = { boms: [], activeId: null, active: null, lines: [] };
+    const state = {
+      boms: [],
+      dealers: (window.slateOpsSettings && Array.isArray(window.slateOpsSettings.dealers)) ? window.slateOpsSettings.dealers : [],
+      activeId: null,
+      activeDealerId: null,
+      active: { bom: null, lines: [] },
+      ui: { dirty: false }
+    };
 
     const elList = $('#bom-list');
     const elSearch = $('#bom-search');
     const elNew = $('#bom-new');
-    const elEditor = $('#bom-editor');
+    const elEditorRoot = $('#bom-editorRoot');
 
-    function fmt(v){ return (v===null||v===undefined)?'':String(v); }
+    function money(n){
+      try { return Number(n||0).toLocaleString(undefined, {style:'currency', currency:'USD'}); }
+      catch(e){ return '$' + (Number(n||0).toFixed(2)); }
+    }
+
+    function setDirty(v){
+      state.ui.dirty = !!v;
+      const badge = $('#bom-dirty');
+      if (badge) badge.style.display = state.ui.dirty ? 'inline-flex' : 'none';
+    }
+
+    function safeNum(v){
+      const n = Number(v);
+      return isFinite(n) ? n : 0;
+    }
+
+    function computeTotals(){
+      const dealers = Array.isArray(state.dealers) ? state.dealers : [];
+      const dealer = dealers.find(d => String(d.id) === String(state.activeDealerId)) || dealers[0] || null;
+
+      const laborRateR = dealer ? safeNum(dealer.labor_rate_retail_published||dealer.labor_rate_retail||0) : 0;
+      const laborRateW = dealer ? safeNum(dealer.labor_rate_wholesale_published||dealer.labor_rate_wholesale||0) : 0;
+      const shopBaseR  = dealer ? safeNum(dealer.shop_supply_base_retail_published||dealer.shop_supply_rate_retail||0) : 0;
+      const shopBaseW  = dealer ? safeNum(dealer.shop_supply_base_wholesale_published||dealer.shop_supply_rate_wholesale||0) : 0;
+
+      let partsR = 0, partsW = 0;
+      (state.active.lines||[]).forEach(ln => {
+        const lt = (ln.line_type || 'PART').toUpperCase();
+        if (lt !== 'PART' && lt !== 'PARTS' && lt !== 'part') return;
+        const q = safeNum(ln.qty || 0);
+        partsR += safeNum(ln.unit_retail || 0) * q;
+        partsW += safeNum(ln.unit_wholesale || 0) * q;
+      });
+
+      const hrs = state.active.bom ? safeNum(state.active.bom.install_hours || 0) : 0;
+      const su  = state.active.bom ? safeNum(state.active.bom.shop_supply_units || 0) : 0;
+
+      const laborR = hrs * laborRateR;
+      const laborW = hrs * laborRateW;
+      const shopR  = su * shopBaseR;
+      const shopW  = su * shopBaseW;
+
+      const totalR = partsR + laborR + shopR;
+      const totalW = partsW + laborW + shopW;
+      const spread = totalR - totalW;
+      const pct = totalR > 0 ? (spread/totalR)*100 : 0;
+
+      return { dealer, partsR, partsW, laborR, laborW, shopR, shopW, totalR, totalW, spread, pct };
+    }
 
     function renderList(){
       const q = (elSearch.value||'').toLowerCase().trim();
-      const rows = state.boms.filter(b=>{
+      const rows = (state.boms||[]).filter(b=>{
         const key = `${b.bom_no||''} ${b.name||''}`.toLowerCase();
         return !q || key.includes(q);
       });
+
       if (!rows.length){
-        elList.innerHTML = `<div style="padding:10px; color:rgba(0,0,0,0.65);">No BOMs found.</div>`;
+        elList.innerHTML = `<div class="bom-ui__muted" style="padding:10px 12px;">No BOMs found.</div>`;
         return;
       }
+
       elList.innerHTML = rows.map(b=>{
-        const active = (String(b.id)===String(state.activeId)) ? 'background:#f5f5f5;' : '';
-        const rev = b.revision ? `<span style="font-size:12px; opacity:.7;">Rev ${escapeHtml(b.revision)}</span>` : '';
+        const isActive = String(b.id)===String(state.activeId);
+        const cls = `bom-ui__item ${isActive?'bom-ui__item--active':''}`;
+        const status = (b.status||'').toLowerCase()==='active' ? 'bom-ui__pill bom-ui__pill--active' : 'bom-ui__pill';
+        const updated = b.updated_at ? new Date(b.updated_at).toLocaleDateString() : '';
         return `
-          <div class="bom-row" data-id="${b.id}" style="padding:10px; border:1px solid rgba(0,0,0,0.08); border-radius:10px; margin-bottom:8px; cursor:pointer; ${active}">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-              <div style="font-weight:600;">${escapeHtml(b.bom_no||'')}</div>
-              ${rev}
+          <div class="${cls}" data-id="${escapeHtml(b.id)}">
+            <div class="bom-ui__itemTop">
+              <div class="bom-ui__bomNo">${escapeHtml(b.bom_no||'')}</div>
+              <div class="${status}">${escapeHtml((b.revision||'').toUpperCase() || 'R?')}</div>
             </div>
-            <div style="font-size:13px; opacity:.8; margin-top:4px;">${escapeHtml(b.name||'')}</div>
+            <div class="bom-ui__name">${escapeHtml(b.name||'')}</div>
+            <div class="bom-ui__meta">
+              <span>${escapeHtml((b.status||'draft').toUpperCase())}</span>
+              <span>${updated ? 'Updated ' + escapeHtml(updated) : ''}</span>
+            </div>
           </div>
         `;
       }).join('');
-      $$('.bom-row', elList).forEach(row=>{
+
+      $$('.bom-ui__item', elList).forEach(row=>{
         row.onclick = ()=> openBom(row.getAttribute('data-id'));
       });
     }
 
-    
-      function money(n){
-        try {
-          const v = Number(n || 0);
-          return v.toLocaleString(undefined, {style:'currency', currency:'USD'});
-        } catch(e){
-          return '$' + (Number(n||0).toFixed(2));
-        }
-      }
-
-	      function computeTotals(){
-	        const dealers = Array.isArray(state.dealers) ? state.dealers : [];
-	        const dealer = dealers.find(d => String(d.id) === String(state.activeDealerId)) || dealers[0] || null;
-        const laborRateR = dealer ? Number(dealer.labor_rate_retail_published||0) : 0;
-        const laborRateW = dealer ? Number(dealer.labor_rate_wholesale_published||0) : 0;
-        const shopBaseR  = dealer ? Number(dealer.shop_supply_base_retail_published||0) : 0;
-        const shopBaseW  = dealer ? Number(dealer.shop_supply_base_wholesale_published||0) : 0;
-
-        let partsR = 0, partsW = 0;
-        state.active.lines.forEach(ln => {
-          if ((ln.line_type || 'PART').toUpperCase() !== 'PART') return;
-          const q = Number(ln.qty || 0);
-          partsR += Number(ln.unit_retail || 0) * q;
-          partsW += Number(ln.unit_wholesale || 0) * q;
-        });
-
-        const hrs = Number(state.active.bom.install_hours || 0);
-        const su  = Number(state.active.bom.shop_supply_units || 0);
-
-        const laborR = hrs * laborRateR;
-        const laborW = hrs * laborRateW;
-        const shopR  = su * shopBaseR;
-        const shopW  = su * shopBaseW;
-
-        return {
-          dealer,
-          partsR, partsW,
-          hrs, su,
-          laborR, laborW,
-          shopR, shopW,
-          installedR: partsR + laborR + shopR,
-          installedW: partsW + laborW + shopW
-        };
-      }
-
-	      async function ensureDealersLoaded(){
-	        if (state.dealers && state.dealers.length) return;
-	        try {
-	          const res = await apiFetch('/wp-json/slate-ops/v1/pricing/dealers');
-	          const dealers = Array.isArray(res)
-	            ? res
-	            : (Array.isArray(res?.dealers) ? res.dealers : []);
-	          // Support both {ok:true, dealers:[...]} and bare array payloads.
-	          if (dealers.length || (res && res.ok)) {
-	            state.dealers = dealers;
-	            if (!state.activeDealerId && state.dealers.length) state.activeDealerId = state.dealers[0].id;
-	          }
-	        } catch(e){}
-	      }
-
-      async function lookupSkuIntoLine(idx, sku){
-        if (!sku) return;
-        try {
-          const res = await apiFetch('/wp-json/slate-ops/v1/pricing/products/lookup?sku=' + encodeURIComponent(sku));
-          if (res && res.ok && res.product) {
-            const p = res.product;
-            const ln = state.active.lines[idx];
-            if (!ln) return;
-            ln.product_id = p.id;
-            ln.sku = p.sku;
-            ln.product_name = p.product_name;
-            ln.unit_wholesale = Number(p.dealer_price_published||0);
-            ln.unit_retail = Number(p.retail_price_published||0);
-            renderEditor();
-          }
-        } catch(e){}
-      }
-
-      function renderEditor(){
-        if(!state.active){
-          elEditor.innerHTML = '<div class="slate-muted">Select a BOM on the left, or click <b>New</b>.</div>';
-          return;
-        }
-
-        const t = computeTotals();
-
-        const dealerOptions = (state.dealers||[]).map(d => `
-          <option value="${escapeAttr(d.id)}" ${String(d.id)===String(state.activeDealerId)?'selected':''}>
-            ${escapeHtml(d.dealer_code || '')} - ${escapeHtml(d.dealer_name || '')}
-          </option>`).join('');
-
-        const linesHtml = state.active.lines.map((ln, idx) => {
-          const type = (ln.line_type||'PART').toUpperCase();
-          if (type !== 'PART') return '';
-          const q = Number(ln.qty||1);
-          const extW = Number(ln.unit_wholesale||0) * q;
-          const extR = Number(ln.unit_retail||0) * q;
-
-          return `
-            <tr data-idx="${idx}">
-              <td style="width:180px">
-                <input class="slate-input bom-sku" list="bom-sku-list" value="${escapeAttr(ln.sku||'')}" placeholder="SKU..." />
-              </td>
-              <td>${escapeHtml(ln.product_name||'')}</td>
-              <td style="width:90px"><input class="slate-input bom-qty" type="number" step="0.01" value="${escapeAttr(ln.qty||1)}" /></td>
-              <td style="width:130px" class="bom-unitw">${money(ln.unit_wholesale||0)}</td>
-              <td style="width:130px" class="bom-extw">${money(extW)}</td>
-              <td style="width:130px" class="bom-unitr">${money(ln.unit_retail||0)}</td>
-              <td style="width:130px" class="bom-extr">${money(extR)}</td>
-              <td style="width:50px"><button class="slate-btn slate-btn--sm slate-btn--ghost bom-del">×</button></td>
-            </tr>
-          `;
-        }).join('');
-
-        elEditor.innerHTML = `
-          <div class="slate-card">
-            <div class="slate-row" style="justify-content:space-between; gap:12px; align-items:flex-end;">
-              <div style="flex:1">
-                <div class="slate-row" style="gap:10px; align-items:flex-end; flex-wrap:wrap;">
-                  <div style="min-width:240px">
-                    <label class="slate-label">BOM #</label>
-                    <input id="bom_no" class="slate-input" value="${escapeAttr(state.active.bom.bom_no||'')}" />
-                  </div>
-                  <div style="flex:1; min-width:260px">
-                    <label class="slate-label">BOM Name</label>
-                    <input id="bom_name" class="slate-input" value="${escapeAttr(state.active.bom.bom_name||'')}" />
-                  </div>
-                  <div style="min-width:120px">
-                    <label class="slate-label">Rev</label>
-                    <input id="bom_rev" class="slate-input" value="${escapeAttr(state.active.bom.revision||'1.0')}" />
-                  </div>
-                  <div style="min-width:140px">
-                    <label class="slate-label">Install Hours</label>
-                    <input id="install_hours" class="slate-input" type="number" step="0.1" value="${escapeAttr(state.active.bom.install_hours||0)}" />
-                  </div>
-                  <div style="min-width:160px">
-                    <label class="slate-label">Shop Supply Units</label>
-                    <input id="shop_supply_units" class="slate-input" type="number" step="0.1" value="${escapeAttr(state.active.bom.shop_supply_units||0)}" />
-                  </div>
-                  <div style="min-width:260px">
-                    <label class="slate-label">Dealer (for totals)</label>
-                    <select id="dealer_id" class="slate-input">${dealerOptions}</select>
-                  </div>
-                </div>
-              </div>
-
-              <div class="slate-row" style="gap:8px;">
-                <button id="bom-save" class="slate-btn slate-btn--green">Save BOM</button>
-                <button id="bom-clone" class="slate-btn">Clone / Revise</button>
-                <button id="bom-create-quote" class="slate-btn slate-btn--ghost">Create Quote</button>
-              </div>
-            </div>
+    function renderEditor(){
+      if (!state.active.bom){
+        elEditorRoot.innerHTML = `<div class="bom-ui__editorEmpty">
+          <div style="text-align:center;">
+            <span class="material-symbols-outlined" style="font-size:56px; display:block; margin-bottom:10px; opacity:.7;">inventory_2</span>
+            <div style="font-size:16px; font-weight:700;">Select a BOM to edit</div>
           </div>
+        </div>`;
+        return;
+      }
 
-          <div class="slate-card" style="margin-top:12px;">
-            <div class="slate-row" style="justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-              <div class="slate-row" style="gap:8px; align-items:center;">
-                <h3 style="margin:0;">Lines</h3>
-                <button id="bom-add-line" class="slate-btn slate-btn--sm">+ Add Part</button>
-                <datalist id="bom-sku-list"></datalist>
-              </div>
-              <div class="slate-row" style="gap:18px; flex-wrap:wrap;">
-                <div><div class="slate-muted" style="font-size:12px;">Parts (Wholesale)</div><div><b>${money(t.partsW)}</b></div></div>
-                <div><div class="slate-muted" style="font-size:12px;">Labor</div><div><b>${money(t.laborW)}</b></div></div>
-                <div><div class="slate-muted" style="font-size:12px;">Shop</div><div><b>${money(t.shopW)}</b></div></div>
-                <div><div class="slate-muted" style="font-size:12px;">Installed (Wholesale)</div><div><b>${money(t.installedW)}</b></div></div>
-                <div><div class="slate-muted" style="font-size:12px;">Installed (Retail)</div><div><b>${money(t.installedR)}</b></div></div>
-              </div>
-            </div>
+      const b = state.active.bom;
+      const totals = computeTotals();
 
-            <div style="overflow:auto; margin-top:10px;">
-              <table class="slate-table">
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Description</th>
-                    <th>Qty</th>
-                    <th>Unit (Wholesale)</th>
-                    <th>Ext (Wholesale)</th>
-                    <th>Unit (Retail)</th>
-                    <th>Ext (Retail)</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${linesHtml || '<tr><td colspan="8" class="slate-muted">No parts lines yet. Click <b>Add Part</b>.</td></tr>'}
-                </tbody>
-              </table>
-            </div>
-          </div>
+      const dealerOptions = (state.dealers||[]).map(d=>{
+        const sel = String(d.id)===String(state.activeDealerId) ? 'selected' : '';
+        const mw = d.market_weight ? ` (${d.market_weight})` : '';
+        return `<option value="${escapeHtml(d.id)}" ${sel}>${escapeHtml(d.name||'Dealer')}${escapeHtml(mw)}</option>`;
+      }).join('');
+
+      const lines = Array.isArray(state.active.lines) ? state.active.lines : [];
+      const rowsHtml = lines.length ? lines.map(ln=>{
+        const id = ln.id;
+        const qty = safeNum(ln.qty||0);
+        const unitRetail = safeNum(ln.unit_retail||0);
+        const unitWholesale = safeNum(ln.unit_wholesale||0);
+        const totW = unitWholesale * qty;
+        const totR = unitRetail * qty;
+
+        return `
+          <tr data-line-id="${escapeHtml(id)}">
+            <td><span class="bom-ui__typeBadge">part</span></td>
+            <td><input class="bom-ui__rowInput bom-ui__num" data-field="sku" value="${escapeHtml(ln.sku||'')}" placeholder="SKU"/></td>
+            <td><input class="bom-ui__rowInput" data-field="description" value="${escapeHtml(ln.description||'')}" placeholder="Description"/></td>
+            <td class="bom-ui__num"><input class="bom-ui__rowInput bom-ui__num" data-field="qty" value="${escapeHtml(qty)}" /></td>
+            <td class="bom-ui__num bom-ui__muted">${money(unitWholesale)}</td>
+            <td class="bom-ui__num bom-ui__muted" style="font-weight:900;">${money(totW)}</td>
+            <td class="bom-ui__num">
+              <input class="bom-ui__rowInput bom-ui__num" data-field="unit_retail" value="${escapeHtml(unitRetail.toFixed(2))}" />
+              <div style="font-size:10px; color:rgba(64,79,75,.40); text-align:right;">(Vendor)</div>
+            </td>
+            <td class="bom-ui__num" style="font-weight:900;">${money(totR)}</td>
+            <td class="bom-ui__num">
+              <button class="bom-ui__delete" data-action="delete"><span class="material-symbols-outlined">delete</span></button>
+            </td>
+          </tr>
         `;
+      }).join('') : `
+        <tr><td colspan="9" class="bom-ui__muted" style="padding:18px; text-align:center; font-style:italic;">No line items added yet.</td></tr>
+      `;
 
-        wireEditor();
-      }
+      elEditorRoot.innerHTML = `
+        <div class="bom-ui__editor">
+          <header class="bom-ui__header">
+            <div class="bom-ui__headerLeft">
+              <div class="bom-ui__headerTitle">${escapeHtml(b.bom_no||'')} <span style="opacity:.35; margin:0 8px;">/</span> ${escapeHtml(b.name||'')}</div>
+              <div class="bom-ui__revBadge">${escapeHtml((b.revision||'').toUpperCase() || 'R?')}</div>
+              <div id="bom-dirty" class="bom-ui__pill" style="display:${state.ui.dirty?'inline-flex':'none'}; background:rgba(214,107,25,.12); color:rgba(214,107,25,.95);">Unsaved</div>
+            </div>
+            <div class="bom-ui__headerRight">
+              <select id="bom-dealer" class="bom-ui__select">
+                <option value="">Select Dealer Context...</option>
+                ${dealerOptions}
+              </select>
+              <div style="width:1px; height:26px; background:rgba(64,79,75,.10);"></div>
+              <button id="bom-clone" class="bom-ui__btn"><span class="material-symbols-outlined">content_copy</span> Clone / Revise</button>
+              <button id="bom-save" class="bom-ui__btn bom-ui__btnPrimary">Save Changes</button>
+            </div>
+          </header>
 
-      let skuSearchTimer = null;
-      async function skuSearch(q){
-        try {
-          const res = await apiFetch('/wp-json/slate-ops/v1/pricing/products/search?q=' + encodeURIComponent(q) + '&limit=15');
-          if (res && res.ok) {
-            const dl = $('#bom-sku-list');
-            if (!dl) return;
-            dl.innerHTML = (res.products||[]).map(p => `<option value="${escapeAttr(p.sku)}">${escapeHtml(p.product_name||'')}</option>`).join('');
-          }
-        } catch(e){}
-      }
+          <div class="bom-ui__body">
+            <div class="bom-ui__card bom-ui__drivers">
+              <div>
+                <label class="bom-ui__label">Install Hours</label>
+                <input id="bom-install-hours" class="bom-ui__input" type="number" step="0.1" min="0" value="${escapeHtml(safeNum(b.install_hours||0))}">
+              </div>
+              <div>
+                <label class="bom-ui__label">Shop Supply Units</label>
+                <input id="bom-shop-units" class="bom-ui__input" type="number" step="1" min="0" value="${escapeHtml(safeNum(b.shop_supply_units||0))}">
+              </div>
+              <div></div>
+            </div>
 
-      function wireEditor(){
-        $('#bom-save').onclick = saveActive;
-        $('#bom-clone').onclick = cloneActive;
-        $('#bom-add-line').onclick = ()=>{
-          state.active.lines.push({ line_type:'PART', sku:'', qty:1, unit_wholesale:0, unit_retail:0, product_name:'' });
+            <div style="height:14px;"></div>
+
+            <div class="bom-ui__card">
+              <div class="bom-ui__tableHeader">
+                <div class="bom-ui__tableTitle">Line Items</div>
+                <button id="bom-add-line" class="bom-ui__btn"><span class="material-symbols-outlined">add</span> Add Part</button>
+              </div>
+              <div class="bom-ui__tableWrap">
+                <table class="bom-ui__table" id="bom-lines">
+                  <thead>
+                    <tr>
+                      <th style="width:80px;">Type</th>
+                      <th style="width:160px;">SKU</th>
+                      <th>Description</th>
+                      <th style="width:90px; text-align:right;">Qty</th>
+                      <th style="width:140px; text-align:right;">Unit Whsle</th>
+                      <th style="width:140px; text-align:right;">Total Whsle</th>
+                      <th style="width:160px; text-align:right;">Unit Retail</th>
+                      <th style="width:140px; text-align:right;">Total Retail</th>
+                      <th style="width:60px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rowsHtml}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="bom-ui__footer" id="bom-totals">
+            <div class="bom-ui__footerGrid">
+              <div>
+                <div class="bom-ui__k">Parts Total</div>
+                <div class="bom-ui__kv"><span>Wholesale</span><span class="bom-ui__money">${money(totals.partsW)}</span></div>
+                <div class="bom-ui__kv"><span>Retail</span><span class="bom-ui__money">${money(totals.partsR)}</span></div>
+              </div>
+
+              <div>
+                <div class="bom-ui__k">Labor & Shop</div>
+                <div class="bom-ui__kv"><span>Labor (Ret)</span><span class="bom-ui__money">${money(totals.laborR)}</span></div>
+                <div class="bom-ui__kv"><span>Shop (Ret)</span><span class="bom-ui__money">${money(totals.shopR)}</span></div>
+              </div>
+
+              <div class="bom-ui__installed">
+                <div class="bom-ui__k">Installed Total</div>
+                <div class="bom-ui__kv"><span style="font-size:11px; font-weight:900; letter-spacing:.12em; text-transform:uppercase;">Wholesale</span><span class="bom-ui__money">${money(totals.totalW)}</span></div>
+                <div class="bom-ui__kv"><span style="font-size:11px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:#2668ed;">Retail</span><span class="bom-ui__money bom-ui__money--retail">${money(totals.totalR)}</span></div>
+              </div>
+
+              <div class="bom-ui__spread">
+                <div class="bom-ui__k">Dealer Spread</div>
+                <div class="bom-ui__spreadVal">${money(totals.spread)}</div>
+                <div class="bom-ui__spreadPct">${totals.pct.toFixed(1)}%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const elDealer = $('#bom-dealer');
+      if (elDealer){
+        elDealer.onchange = (e)=>{
+          const v = e.target.value ? Number(e.target.value) : null;
+          state.activeDealerId = v;
           renderEditor();
         };
+      }
 
-        $('#dealer_id').onchange = (e)=>{ state.activeDealerId = e.target.value; renderEditor(); };
+      const elIH = $('#bom-install-hours');
+      if (elIH){
+        elIH.oninput = ()=>{
+          state.active.bom.install_hours = safeNum(elIH.value);
+          setDirty(true);
+          renderEditor();
+        };
+      }
 
-        $('#install_hours').oninput = (e)=>{ state.active.bom.install_hours = Number(e.target.value||0); renderEditor(); };
-        $('#shop_supply_units').oninput = (e)=>{ state.active.bom.shop_supply_units = Number(e.target.value||0); renderEditor(); };
+      const elSU = $('#bom-shop-units');
+      if (elSU){
+        elSU.oninput = ()=>{
+          state.active.bom.shop_supply_units = safeNum(elSU.value);
+          setDirty(true);
+          renderEditor();
+        };
+      }
 
-        $('#bom_create_quote') && ($('#bom_create_quote').onclick = ()=>{});
-        const quoteBtn = $('#bom-create-quote');
-        if (quoteBtn) {
-          quoteBtn.onclick = async ()=>{
-            const bom_id = state.active.bom.id;
-            const dealer_id = state.activeDealerId;
-            if (!bom_id || !dealer_id) { alert('Select a BOM and dealer.'); return; }
-            try {
-              const res = await apiFetch('/wp-json/slate-ops/v1/pricing/quotes/from-bom', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ bom_id, dealer_id, qty: 1 })
-              });
-              if (res && res.ok) {
-                alert('Quote created: ' + res.quote_no);
-              } else {
-                alert('Quote failed: ' + (res && res.error ? res.error : 'Unknown error'));
-              }
-            } catch(e){
-              alert('Quote failed. See console.');
-              console.error(e);
-            }
-          };
-        }
+      const elAdd = $('#bom-add-line');
+      if (elAdd) elAdd.onclick = ()=> addLine();
 
-        // header fields
-        $('#bom_no').oninput = e => { state.active.bom.bom_no = e.target.value; };
-        $('#bom_name').oninput = e => { state.active.bom.bom_name = e.target.value; };
-        $('#bom_rev').oninput = e => { state.active.bom.revision = e.target.value; };
+      const elSave = $('#bom-save');
+      if (elSave) elSave.onclick = ()=> saveBom();
 
-        // rows
-        elEditor.querySelectorAll('.slate-table tbody tr[data-idx]').forEach(tr=>{
-          const idx = Number(tr.getAttribute('data-idx'));
-          const skuInput = tr.querySelector('.bom-sku');
-          const qtyInput = tr.querySelector('.bom-qty');
-          const delBtn = tr.querySelector('.bom-del');
+      const elClone = $('#bom-clone');
+      if (elClone) elClone.onclick = ()=> cloneBom();
 
-          if (skuInput) {
-            skuInput.oninput = (e)=>{
-              const v = e.target.value || '';
-              state.active.lines[idx].sku = v;
-              clearTimeout(skuSearchTimer);
-              skuSearchTimer = setTimeout(()=>skuSearch(v), 200);
-            };
-            skuInput.onblur = (e)=>{
-              const v = (e.target.value||'').trim();
-              state.active.lines[idx].sku = v;
-              if (v) lookupSkuIntoLine(idx, v);
-            };
-          }
-          if (qtyInput) {
-            qtyInput.oninput = (e)=>{
-              state.active.lines[idx].qty = Number(e.target.value||0);
-              renderEditor();
-            };
-          }
-          if (delBtn) {
-            delBtn.onclick = ()=>{
-              state.active.lines.splice(idx,1);
-              renderEditor();
-            };
-          }
+      const tbody = $('#bom-lines') ? $('#bom-lines').querySelector('tbody') : null;
+      if (tbody){
+        tbody.addEventListener('input', (ev)=>{
+          const input = ev.target;
+          if (!input || !input.closest) return;
+          const tr = input.closest('tr');
+          if (!tr) return;
+          const lineId = tr.getAttribute('data-line-id');
+          const field = input.getAttribute('data-field');
+          if (!lineId || !field) return;
+          const ln = (state.active.lines||[]).find(x=>String(x.id)===String(lineId));
+          if (!ln) return;
+          if (field === 'qty' || field === 'unit_retail') ln[field] = safeNum(input.value);
+          else ln[field] = input.value;
+          setDirty(true);
+          renderEditor();
+        });
+
+        tbody.addEventListener('click', (ev)=>{
+          const btn = ev.target.closest ? ev.target.closest('button[data-action="delete"]') : null;
+          if (!btn) return;
+          const tr = btn.closest('tr');
+          const lineId = tr ? tr.getAttribute('data-line-id') : null;
+          if (!lineId) return;
+          deleteLine(lineId);
         });
       }
-
-
-function suggestCloneBomNo(bomNo){
-      if (!bomNo) return '';
-      if (/-CL\d+$/i.test(bomNo)){
-        const m = bomNo.match(/-CL(\d+)$/i);
-        const n = Number(m[1]||1)+1;
-        return bomNo.replace(/-CL\d+$/i, `-CL${n}`);
-      }
-      return `${bomNo}-CL1`;
     }
 
-    function suggestNextRevisionBomNo(bomNo){
-      if (!bomNo) return '';
-      // If already has -R#, increment
-      const m = bomNo.match(/(.*)-R(\d+)$/i);
-      if (m){
-        const base = m[1];
-        const n = Number(m[2]||1)+1;
-        return `${base}-R${n}`;
-      }
-      return `${bomNo}-R2`;
+    async function api(path, opts){
+      const root = (window.slateOpsSettings && window.slateOpsSettings.restRoot) ? window.slateOpsSettings.restRoot : '';
+      const url = root + path;
+      const headers = Object.assign({'X-WP-Nonce': (window.slateOpsSettings && window.slateOpsSettings.nonce) ? window.slateOpsSettings.nonce : ''}, (opts && opts.headers) ? opts.headers : {});
+      const res = await fetch(url, Object.assign({}, opts||{}, {headers}));
+      const json = await res.json().catch(()=>null);
+      if (!res.ok) throw new Error((json && json.error) ? json.error : ('HTTP ' + res.status));
+      return json;
     }
 
-    async function saveActive(){
-      if(!state.activeId || !state.active) return;
-
-      const payload = {
-        bom_no: ($('#bom_no')?.value || '').trim(),
-        name: ($('#bom_name')?.value || '').trim(),
-        revision: ($('#bom_rev')?.value || '').trim(),
-        install_hours: ($('#install_hours')?.value || '').trim(),
-        shop_supply_units: ($('#shop_supply_units')?.value || '').trim(),
-        lines: (Array.isArray(state.active.lines) ? state.active.lines : []).map((l,i)=>({
-          sku: (l.sku||'').trim(),
-          qty: Number(l.qty||1),
-          sort_order: i+1
-        }))
-      };
-
+    async function loadList(){
       try{
-        const res = await api.req('/boms/' + encodeURIComponent(state.activeId), {
-          method:'POST',
-          body: JSON.stringify(payload)
-        });
-        if (res && res.ok === false){
-          alert(res.error || 'Save failed');
-          return;
-        }
-        await refreshList();
-        await openBom(state.activeId);
-        toast('Saved');
-      }catch(err){
-        alert((err && err.message) ? err.message : 'Save failed');
-      }
-    }
-
-    async function cloneActive(){
-      if(!state.activeId || !state.active) return;
-      const currentNo = state.active.bom?.bom_no || '';
-      const suggested = suggestCloneBomNo(currentNo);
-      const newBomNo = (prompt('New BOM #', suggested) || '').trim();
-      if(!newBomNo) return;
-
-      try{
-        const res = await api.req('/boms/' + encodeURIComponent(state.activeId) + '/clone', {
-          method:'POST',
-          body: JSON.stringify({ new_bom_no: newBomNo })
-        });
-        if (!res || res.ok === false){
-          alert((res && res.error) ? res.error : 'Clone failed');
-          return;
-        }
-        const newId = res.new_id || res.id;
-        await refreshList();
-        if(newId){ await openBom(newId); }
-        toast('Cloned');
-      }catch(err){
-        alert((err && err.message) ? err.message : 'Clone failed');
+        const res = await api('/boms', {method:'GET'});
+        const data = (res && res.data) ? res.data : res;
+        state.boms = Array.isArray(data) ? data : [];
+        renderList();
+      } catch(err){
+        elList.innerHTML = `<div style="padding:10px 12px; color:#b00;">${escapeHtml(err.message||'Failed to load BOM list')}</div>`;
       }
     }
 
     async function openBom(id){
       state.activeId = id;
-      await ensureDealersLoaded();
+      renderList();
       try{
-        const res = await api.req(`/boms/${id}`);
-        if (!res || !res.ok){
-          const msg = (res && res.error) ? res.error : 'Failed to load BOM';
-          elEditor.innerHTML = `<h2 style="margin:0 0 8px;">BOM Builder</h2><div style="color:#b00;">${escapeHtml(msg)}</div>`;
-          return;
+        const res = await api('/boms/' + encodeURIComponent(id), {method:'GET'});
+        const data = (res && res.data) ? res.data : res;
+        const bom = data && data.bom ? data.bom : data;
+        const lines = data && data.lines ? data.lines : (data && data.items ? data.items : []);
+        state.active = { bom: bom || null, lines: Array.isArray(lines)?lines:[] };
+        setDirty(false);
+        if (!state.activeDealerId){
+          const first = (state.dealers||[])[0];
+          state.activeDealerId = first ? first.id : null;
         }
-        // Normalize shape for the editor.
-        // Some older responses may return just the BOM object without wrappers.
-        const bom = res.bom || res;
-        const lines = Array.isArray(res.lines) ? res.lines : [];
-        state.active = { bom, lines };
-        // Legacy alias for older code paths.
-        state.lines = lines;
+        renderEditor();
+      } catch(err){
+        elEditorRoot.innerHTML = `<div style="padding:18px;"><div class="bom-ui__title">BOM Error</div><div style="margin-top:8px; color:#b00;">${escapeHtml(err.message||'Failed to load BOM')}</div></div>`;
+      }
+    }
+
+    function addLine(){
+      if (!state.active || !state.active.bom) return;
+      const tmpId = 'tmp_' + Math.random().toString(16).slice(2);
+      state.active.lines.push({ id: tmpId, bom_id: state.active.bom.id, line_type: 'part', sku:'', description:'', qty:1, unit_retail:0, unit_wholesale:0, sort_order: (state.active.lines.length+1) });
+      setDirty(true);
+      renderEditor();
+    }
+
+    function deleteLine(lineId){
+      state.active.lines = (state.active.lines||[]).filter(l => String(l.id) !== String(lineId));
+      setDirty(true);
+      renderEditor();
+    }
+
+    async function saveBom(){
+      if (!state.active || !state.active.bom) return;
+      try{
+        const payload = { bom: state.active.bom, lines: state.active.lines };
+        let res;
+        try{
+          res = await api('/boms/' + encodeURIComponent(state.active.bom.id) + '/save', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+          });
+        } catch(e){
+          res = await api('/boms/' + encodeURIComponent(state.active.bom.id), {
+            method:'PUT',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+          });
+        }
+        const data = (res && res.data) ? res.data : res;
+        if (data && data.bom) state.active.bom = data.bom;
+        if (data && data.lines) state.active.lines = data.lines;
+        setDirty(false);
+        await loadList();
+        renderEditor();
+      } catch(err){
+        alert(err.message || 'Save failed');
+      }
+    }
+
+    async function createBom(){
+      const bom_no = (prompt('New BOM # (e.g., BOM-101)') || '').trim();
+      if (!bom_no) return;
+      const name = (prompt('BOM Name') || '').trim();
+      try{
+        const res = await api('/boms', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ bom_no, name })
+        });
+        await loadList();
+        const data = (res && res.data) ? res.data : res;
+        const bom = data && data.bom ? data.bom : (data && data.id ? data : null);
+        if (bom && bom.id) openBom(bom.id);
+      } catch(err){
+        alert(err.message || 'Create failed');
+      }
+    }
+
+    async function cloneBom(){
+      if (!state.active || !state.active.bom) return;
+      const suggested = (state.active.bom.bom_no || 'BOM-NEW') + '-R2';
+      const newBomNo = (prompt('New BOM #', suggested) || '').trim();
+      if (!newBomNo) return;
+      try{
+        const res = await api('/boms', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ bom_no: newBomNo, name: (state.active.bom.name||'') + ' (Clone)' })
+        });
+        const data = (res && res.data) ? res.data : res;
+        const bom = data && data.bom ? data.bom : data;
+        if (!bom || !bom.id) throw new Error('Clone failed');
+        state.active = { bom, lines: (state.active.lines||[]).map(l=>Object.assign({}, l, { id:'tmp_'+Math.random().toString(16).slice(2), bom_id: bom.id })) };
+        state.activeId = bom.id;
+        setDirty(true);
+        await loadList();
         renderList();
         renderEditor();
-      }catch(err){
-        const msg = (err && err.message) ? err.message : 'Failed to load BOM';
-        elEditor.innerHTML = `<h2 style="margin:0 0 8px;">BOM Builder</h2><div style="color:#b00;">${escapeHtml(msg)}</div>`;
+      } catch(err){
+        alert(err.message || 'Clone failed');
       }
     }
-
-    async function refreshList(){
-      try{
-        const res = await api.req('/boms');
-        if (!res || !res.ok){
-          const msg = (res && res.error) ? res.error : 'Failed to load BOM list';
-          elList.innerHTML = `<div style="padding:10px; color:#b00;">${escapeHtml(msg)}</div>`;
-          return;
-        }
-        state.boms = res.boms || [];
-        renderList();
-      }catch(err){
-        const msg = (err && err.message) ? err.message : 'Failed to load BOM list';
-        elList.innerHTML = `<div style="padding:10px; color:#b00;">${escapeHtml(msg)}</div>`;
-      }
-    }
-
-    function newBomTemplate(){
-      return {
-        bom: { bom_no:'', name:'', revision:'', install_hours:'0', shop_supply_units:'0' },
-        lines: []
-      };
-    }
-
-    elNew.onclick = ()=>{
-      state.activeId = 0;
-      state.active = newBomTemplate();
-      state.lines = [];
-      renderList();
-      renderEditor();
-    };
 
     elSearch.oninput = renderList;
+    elNew.onclick = createBom;
 
-    // load list on entry
-    await refreshList();
-  }
+    window.addEventListener('beforeunload', (e)=>{
+      if (!state.ui.dirty) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
+
+    await loadList();
+}
+
 
 
 async function render(){

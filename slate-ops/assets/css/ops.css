@@ -1712,3 +1712,82 @@ body.slate-ops{ background: var(--p0-canvas); }
 
 .cs-intake-actions{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-top:12px; }
 .cs-check{ display:inline-flex; align-items:center; gap:8px; font-size:12px; color:rgba(0,0,0,0.6); }
+
+/* ===============================
+   BOM Builder UI (v0.11.7)
+   UI-first rebuild matching AI Studio BOM spec layout
+   Scoped to .bom-ui so other screens are untouched.
+   =============================== */
+
+.bom-ui{display:flex; height:calc(100vh - 56px); background:var(--sand,#e1dfc8);} /* 56px topbar in ops shell */
+.bom-ui__list{width:340px; min-width:300px; max-width:420px; border-right:1px solid rgba(64,79,75,.12); background:rgba(255,255,255,.55); backdrop-filter:blur(6px); display:flex; flex-direction:column;}
+.bom-ui__listHeader{padding:16px 16px 10px; border-bottom:1px solid rgba(64,79,75,.10);} 
+.bom-ui__title{font-weight:800; letter-spacing:-.02em; color:var(--sage,#404f4b);} 
+.bom-ui__search{width:100%; margin-top:10px; padding:10px 12px; border-radius:10px; border:1px solid rgba(64,79,75,.18); background:#fff; font-size:13px;}
+.bom-ui__items{padding:10px; overflow:auto;}
+.bom-ui__item{padding:10px 12px; border-radius:12px; border:1px solid rgba(64,79,75,.10); background:#fff; cursor:pointer; margin-bottom:10px;}
+.bom-ui__item:hover{background:rgba(64,79,75,.04)}
+.bom-ui__item--active{border-color:rgba(214,107,25,.45); box-shadow:0 1px 0 rgba(0,0,0,.03)}
+.bom-ui__itemTop{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+.bom-ui__bomNo{font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace); font-weight:800; font-size:12px; color:var(--sage,#404f4b);} 
+.bom-ui__pill{font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; padding:4px 8px; border-radius:999px; background:rgba(64,79,75,.08); color:rgba(64,79,75,.70);} 
+.bom-ui__pill--active{background:rgba(16,185,129,.12); color:rgb(4,120,87);} 
+.bom-ui__name{margin-top:6px; font-size:13px; font-weight:700; color:rgba(64,79,75,.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.bom-ui__meta{margin-top:6px; font-size:11px; color:rgba(64,79,75,.55); display:flex; justify-content:space-between;}
+
+.bom-ui__editor{flex:1; display:flex; flex-direction:column; min-width:0;}
+.bom-ui__editorEmpty{flex:1; display:flex; align-items:center; justify-content:center; color:rgba(64,79,75,.45);} 
+
+.bom-ui__header{height:64px; display:flex; align-items:center; justify-content:space-between; padding:0 22px; background:rgba(255,255,255,.55); backdrop-filter:blur(6px); border-bottom:1px solid rgba(64,79,75,.10); position:sticky; top:0; z-index:10;}
+.bom-ui__headerLeft{display:flex; align-items:center; gap:12px; min-width:0;}
+.bom-ui__headerTitle{font-weight:900; letter-spacing:-.02em; color:var(--sage,#404f4b); text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.bom-ui__revBadge{font-size:11px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; padding:6px 10px; border-radius:10px; background:rgba(64,79,75,.08); color:rgba(64,79,75,.70);} 
+
+.bom-ui__headerRight{display:flex; align-items:center; gap:10px;}
+.bom-ui__select{padding:9px 10px; border-radius:10px; border:1px solid rgba(64,79,75,.18); background:#fff; font-size:13px; color:rgba(64,79,75,.9);} 
+.bom-ui__btn{display:inline-flex; align-items:center; gap:8px; padding:10px 12px; border-radius:10px; border:1px solid rgba(64,79,75,.14); background:rgba(255,255,255,.7); cursor:pointer; font-weight:800; font-size:12px; letter-spacing:.10em; text-transform:uppercase; color:rgba(64,79,75,.75);} 
+.bom-ui__btn:hover{background:#fff; color:rgba(38,104,237,.95); border-color:rgba(38,104,237,.25)}
+.bom-ui__btnPrimary{background:#2668ed; border-color:#2668ed; color:#fff; letter-spacing:.04em; text-transform:none; font-size:13px;}
+.bom-ui__btnPrimary:hover{background:rgba(38,104,237,.92); color:#fff;}
+
+.bom-ui__body{flex:1; overflow:auto; padding:22px; padding-bottom:140px;}
+.bom-ui__card{background:#fff; border:1px solid rgba(64,79,75,.08); border-radius:14px; box-shadow:0 1px 0 rgba(0,0,0,.02);} 
+
+.bom-ui__drivers{padding:16px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;}
+.bom-ui__label{display:block; font-size:11px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:rgba(64,79,75,.55); margin-bottom:6px;}
+.bom-ui__input{width:100%; padding:10px 12px; border-radius:12px; border:1px solid transparent; background:rgba(64,79,75,.06); font-weight:900; color:rgba(64,79,75,.92);} 
+.bom-ui__input:focus{outline:none; border-color:rgba(38,104,237,.35); box-shadow:0 0 0 3px rgba(38,104,237,.12);} 
+
+.bom-ui__tableHeader{display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid rgba(64,79,75,.06);} 
+.bom-ui__tableTitle{font-weight:900; letter-spacing:-.02em; text-transform:uppercase; color:var(--sage,#404f4b);} 
+
+.bom-ui__tableWrap{overflow:auto;}
+.bom-ui__table{width:100%; border-collapse:collapse; font-size:13px;}
+.bom-ui__table th{background:rgba(64,79,75,.06); color:rgba(64,79,75,.60); font-size:11px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; padding:14px 12px; text-align:left; white-space:nowrap;}
+.bom-ui__table td{border-top:1px solid rgba(64,79,75,.06); padding:12px; vertical-align:top;}
+.bom-ui__table tr:hover td{background:rgba(64,79,75,.04)}
+.bom-ui__typeBadge{display:inline-flex; padding:4px 8px; border-radius:8px; font-size:10px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; background:rgba(38,104,237,.10); color:rgba(38,104,237,.95);} 
+.bom-ui__rowInput{width:100%; border:none; background:transparent; padding:0; font-size:13px; color:rgba(64,79,75,.92);} 
+.bom-ui__rowInput:focus{outline:none;}
+.bom-ui__num{text-align:right; font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);} 
+.bom-ui__muted{color:rgba(64,79,75,.55);} 
+.bom-ui__delete{opacity:0; cursor:pointer; color:rgba(64,79,75,.45);} 
+.bom-ui__table tr:hover .bom-ui__delete{opacity:1;}
+.bom-ui__delete:hover{color:#e11d48;}
+
+.bom-ui__footer{position:fixed; left:var(--ops-sidebar-w,260px); right:0; bottom:0; background:#fff; border-top:1px solid rgba(64,79,75,.12); padding:16px 22px; box-shadow:0 -6px 16px rgba(0,0,0,.06); z-index:15;}
+.bom-ui__footerGrid{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:18px; max-width:1200px; margin:0 auto;}
+.bom-ui__k{font-size:11px; font-weight:900; letter-spacing:.18em; text-transform:uppercase; color:rgba(64,79,75,.45); margin-bottom:6px;}
+.bom-ui__kv{display:flex; justify-content:space-between; gap:10px; font-size:13px; color:rgba(64,79,75,.70);} 
+.bom-ui__money{font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace); font-weight:900; color:rgba(64,79,75,.92);} 
+.bom-ui__installed{background:rgba(64,79,75,.06); border-radius:12px; padding:12px;}
+.bom-ui__installed .bom-ui__money--retail{color:#2668ed; font-size:18px; font-weight:1000;}
+.bom-ui__spread{display:flex; flex-direction:column; align-items:flex-end; justify-content:center;}
+.bom-ui__spreadVal{font-family:var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace); font-weight:1000; font-size:26px; color:rgb(4,120,87);} 
+.bom-ui__spreadPct{font-size:11px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:rgba(4,120,87,.65);} 
+
+@media (max-width: 1100px){
+  .bom-ui__drivers{grid-template-columns:1fr;}
+  .bom-ui__footerGrid{grid-template-columns:1fr 1fr;}
+}
+
